@@ -2,6 +2,7 @@
 import sys
 import pytest
 import logging
+from os.path import split
 import numpy as np
 from numpy.testing import assert_allclose
 import astropy.units as u
@@ -25,6 +26,7 @@ from gammapy.modeling.models import (
     DiskSpatialModel,
 )
 from gammapy.utils.testing import mpl_plot_check, requires_data
+from gammapy.utils.scripts import make_path
 
 
 class MyModel(ModelBase):
@@ -109,6 +111,15 @@ def test_model_init():
 
     with pytest.raises(u.UnitConversionError):
         MyModel(x=99 * u.s)
+
+
+def test_recursive_model_filename_update(tmp_path):
+    for model_filename in [tmp_path / "model.fits", "model.fits"]:
+        filename_path = make_path(model_filename)
+        if hasattr(filename_path, "parent") and tmp_path == filename_path.parent:
+            _, filename = split(model_filename)
+            model_filename = filename
+        assert model_filename == "model.fits"
 
 
 def test_wrapper_model():

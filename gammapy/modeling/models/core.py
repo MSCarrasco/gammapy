@@ -40,9 +40,11 @@ def _recursive_dict_filename_update(dict_, path):
 
 def _recursive_model_filename_update(model, path):
     """Update model filename to relative path if child of path."""
-    if hasattr(model, "filename") and path == make_path(model.filename).parent:
-        _, filename = split(model.filename)
-        model.filename = filename
+    if hasattr(model, "filename"):
+        filename_path = make_path(model.filename)
+        if hasattr(filename_path, "parent") and path == filename_path.parent:
+            _, filename = split(model.filename)
+            model.filename = filename
 
     if hasattr(model, "_models"):
         for m in model._models:
