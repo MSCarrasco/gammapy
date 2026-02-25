@@ -464,7 +464,14 @@ class FluxPointsWorkflowStep(WorkflowStepBase):
         fp_settings = self.config.flux_points
         self.log.info("Calculating flux points.")
 
-        energy_edges = make_energy_axis(fp_settings.energy).edges
+        energy_edges = make_energy_axis(fp_settings.energy)
+        if energy_edges is not None:
+            energy_edges = energy_edges.edges
+        else:
+            raise ValueError(
+                "Missing or incomplete energy axis parameters in flux points configuration."
+            )
+
         flux_point_estimator = FluxPointsEstimator(
             energy_edges=energy_edges,
             source=fp_settings.source,
