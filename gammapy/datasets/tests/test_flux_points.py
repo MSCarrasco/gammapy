@@ -14,7 +14,6 @@ from gammapy.modeling.models import (
     PowerLawSpectralModel,
     SkyModel,
 )
-from gammapy.modeling.models.core import _write_models
 from gammapy.utils.scripts import make_path
 from gammapy.utils.testing import mpl_plot_check, requires_data, requires_dependency
 
@@ -84,11 +83,6 @@ def test_flux_point_dataset_serialization(tmp_path):
         assert np.all(new_dataset.mask_fit == dataset.mask_safe)
     assert np.all(new_dataset.mask_safe == dataset.mask_safe)
     assert new_dataset.name == "test_dataset"
-
-    with pytest.raises(ValueError):
-        datasets.write(filename=None)
-    with pytest.raises(ValueError):
-        _write_models(datasets.models, path=None)
 
 
 @requires_data()

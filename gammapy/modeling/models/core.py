@@ -42,7 +42,7 @@ def _recursive_model_filename_update(model, path):
     """Update model filename to relative path if child of path."""
     if hasattr(model, "filename"):
         filename_path = make_path(model.filename)
-        if hasattr(filename_path, "parent") and path == filename_path.parent:
+        if filename_path is not None and path == filename_path.parent:
             _, filename = split(model.filename)
             model.filename = filename
 
