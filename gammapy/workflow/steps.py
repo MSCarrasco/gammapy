@@ -496,7 +496,13 @@ class LightCurveWorkflowStep(WorkflowStepBase):
         """Calculate light curve for a specific model component."""
         lc_settings = self.config.light_curve
         self.log.info("Computing light curve.")
-        energy_edges = make_energy_axis(lc_settings.energy_edges).edges
+        energy_edges = make_energy_axis(lc_settings.energy_edges)
+        if energy_edges is not None:
+            energy_edges = energy_edges.edges
+        else:
+            raise ValueError(
+                "Missing or incomplete energy axis parameters in light curve configuration."
+            )
 
         if (
             lc_settings.time_intervals.start is None
