@@ -59,6 +59,9 @@ def test_read_write_yaml_checksum(tmp_path):
     with pytest.warns(UserWarning):
         read_yaml(bad, checksum=True)
 
+    with pytest.raises(ValueError):
+        read_yaml(None)
+
 
 def test_requires_module():
     class MyClass:
