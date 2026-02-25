@@ -114,12 +114,16 @@ def test_model_init():
 
 
 def test_recursive_model_filename_update(tmp_path):
-    for model_filename in [tmp_path / "model.fits", "model.fits"]:
+    model_filenames = [None, tmp_path / "model.fits", "model.fits"]
+    for i, model_filename in enumerate(model_filenames):
         filename_path = make_path(model_filename)
         if hasattr(filename_path, "parent") and tmp_path == filename_path.parent:
             _, filename = split(model_filename)
             model_filename = filename
-        assert model_filename == "model.fits"
+        if i == 0:
+            assert model_filename is None
+        else:
+            assert model_filename == "model.fits"
 
 
 def test_wrapper_model():
