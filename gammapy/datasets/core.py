@@ -493,6 +493,8 @@ class Datasets(collections.abc.MutableSequence):
             When True adds both DATASUM and CHECKSUM cards to the headers written to the FITS files.
             Default is True.
         """
+        if filename is None:
+            raise ValueError("Filename cannot be None")
         path = make_path(filename)
 
         data = {"datasets": []}
