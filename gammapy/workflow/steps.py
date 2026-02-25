@@ -128,6 +128,8 @@ class ObservationsWorkflowStep(WorkflowStepBase):
         elif path.is_dir():
             self.log.debug(f"Setting datastore from directory: {path}")
             return DataStore.from_dir(path)
+        elif path is None:
+            raise ValueError("No datastore file in configuration")
         else:
             raise FileNotFoundError(f"Datastore not found: {path}")
 
