@@ -92,7 +92,7 @@ def read_yaml(filename, logger=None, checksum=False):
         YAML file content as a dictionary.
     """
     if filename is None:
-        raise ValueError("Filename cannot be None")
+        raise ValueError("The filename is not defined.")
     path = make_path(filename)
     if logger is not None:
         logger.info(f"Reading {path}")
@@ -143,7 +143,7 @@ def write_yaml(
     if checksum:
         text = add_checksum(text, sort_keys=sort_keys)
     if filename is None:
-        raise ValueError("Filename cannot be None")
+        raise ValueError("The filename is not defined.")
     path = make_path(filename)
     path.parent.mkdir(exist_ok=True)
     if path.exists() and not overwrite:

@@ -179,7 +179,7 @@ def _write_models(
     """Write models to YAML file with additional information using an `extra_dict`."""
 
     if path is None:
-        raise ValueError("Path cannot be None")
+        raise ValueError("The path is not defined.")
     base_path, _ = split(path)
     path = make_path(path)
     base_path = make_path(base_path)

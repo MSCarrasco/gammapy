@@ -494,7 +494,7 @@ class Datasets(collections.abc.MutableSequence):
             Default is True.
         """
         if filename is None:
-            raise ValueError("Filename cannot be None")
+            raise ValueError("The filename is not defined.")
         path = make_path(filename)
 
         data = {"datasets": []}

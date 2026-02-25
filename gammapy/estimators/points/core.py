@@ -253,7 +253,7 @@ class FluxPoints(FluxMaps):
             Flux points.
         """
         if filename is None:
-            raise ValueError("Filename cannot be None")
+            raise ValueError("The filename is not defined.")
         filename = make_path(filename)
         gti = None
         try:
@@ -311,7 +311,7 @@ class FluxPoints(FluxMaps):
             Default is False.
         """
         if filename is None:
-            raise ValueError("Filename cannot be None")
+            raise ValueError("The filename is not defined.")
         filename = make_path(filename)
 
         if sed_type is None:

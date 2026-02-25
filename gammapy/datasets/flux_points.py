@@ -238,7 +238,7 @@ class FluxPointsDataset(Dataset):
         table["mask_safe"] = self.mask_safe
 
         if filename is None:
-            raise ValueError("Filename cannot be None")
+            raise ValueError("The filename is not defined.")
         filename = make_path(filename)
 
         if "fits" in filename.suffixes:
