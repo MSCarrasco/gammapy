@@ -252,6 +252,8 @@ class FluxPoints(FluxMaps):
         flux_points : `FluxPoints`
             Flux points.
         """
+        if filename is None:
+            raise ValueError("Filename cannot be None")
         filename = make_path(filename)
         gti = None
         try:
@@ -308,6 +310,8 @@ class FluxPoints(FluxMaps):
             When True adds both DATASUM and CHECKSUM cards to the headers written to the file.
             Default is False.
         """
+        if filename is None:
+            raise ValueError("Filename cannot be None")
         filename = make_path(filename)
 
         if sed_type is None:
