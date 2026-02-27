@@ -58,6 +58,15 @@ METADATA_FITS_KEYS = {
             "output": lambda v: {"RA_OBJ": v.ra.deg, "DEC_OBJ": v.dec.deg},
         },
     },
+    "hdu": {
+        "data_format": "HDUCLASS",
+        "data_format_documentation": "HDUDOC",
+        "data_format_version": "HDUVERS",
+        "general_type": "HDUCLAS1",
+        "type": "HDUCLAS2",
+        "subtype": "HDUCLAS3",
+        "specific_type": "HDUCLAS4",
+    },
 }
 
 
@@ -312,3 +321,35 @@ class TargetMetaData(MetaData):
     def validate_radec_mean(cls, v):
         if isinstance(v, SkyCoord):
             return v.icrs
+
+
+class HDUMetaData(MetaData):
+    """General metadata information about the HDU.
+
+    Parameters
+    ----------
+    data_format : str, optional
+        General identifier of the data format. Recommended value: “GADF” (for "gamma-astro-data-formats").
+    data_format_documentation : str, optional
+        Link to the DL3 specifications documentation.
+    data_format_version : str, optional
+        Version of the DL3 specification format.
+    general_type : str, optional
+        General type of HDU, currently: EVENTS, GTI or RESPONSE.
+    type : str, optional
+        In case of RESPONSE type, refers to the IRF components stored within the HDU: EFF_AREA, BKG, EDISP or RPSF.
+    subtype : str, optional
+        In case of RESPONSE type, refers to the way the IRF component was produced (POINT-LIKE or FULL-ENCLOSURE).
+    specific_type : str, optional
+        In case of RESPONSE type, refers to the name of the specific format.
+    """
+
+    _tag: ClassVar[Literal["hdu"]] = "hdu"
+
+    data_format: Optional[str] = None
+    data_format_documentation: Optional[str] = None
+    data_format_version: Optional[str] = None
+    general_type: Optional[str] = None
+    type: Optional[str] = None
+    subtype: Optional[str] = None
+    specific_type: Optional[str] = None
