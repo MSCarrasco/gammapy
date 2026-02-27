@@ -5,6 +5,7 @@ from gammapy.utils.fits import earth_location_from_dict
 from gammapy.utils.metadata import (
     METADATA_FITS_KEYS,
     CreatorMetaData,
+    HDUMetaData,
     MetaData,
     ObsInfoMetaData,
     PointingInfoMetaData,
@@ -130,11 +131,14 @@ class GTIMetaData(MetaData):
         The GTI reference time.
     creation : `~gammapy.utils.metadata.CreatorMetaData`
         The creation metadata.
+    hdu : list of `~gammapy.utils.HDUMetaData`
+        Info about the HDU.
     """
 
     _tag: ClassVar[Literal["GTI"]] = "GTI"
     reference_time: Optional[TimeType] = None
     creation: Optional[CreatorMetaData] = None
+    hdu: Optional[HDUMetaData] = None
 
     def to_header(self, format="gadf"):
         result = super().to_header(format)
@@ -165,11 +169,14 @@ class EventListMetaData(MetaData):
         The event class metadata.
     creation : `~gammapy.utils.metadata.CreatorMetaData`
         The creation metadata.
+    hdu : list of `~gammapy.utils.HDUMetaData`
+        Info about the HDU.
     """
 
     _tag: ClassVar[Literal["EventList"]] = "eventlist"
     event_class: Optional[str] = None
     creation: Optional[CreatorMetaData] = None
+    hdu: Optional[HDUMetaData] = None
     optional: Optional[dict] = None
 
     @classmethod
