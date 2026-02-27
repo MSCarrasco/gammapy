@@ -59,6 +59,7 @@ METADATA_FITS_KEYS = {
         },
     },
     "hdu": {
+        "extension_name": "EXTNAME",
         "data_format": "HDUCLASS",
         "data_format_documentation": "HDUDOC",
         "data_format_version": "HDUVERS",
@@ -328,8 +329,10 @@ class HDUMetaData(MetaData):
 
     Parameters
     ----------
+    extension_name : str, optional
+        The HDU extension name.
     data_format : str, optional
-        General identifier of the data format. Recommended value: “GADF” (for "gamma-astro-data-formats").
+        General identifier of the data format. Recommended value: "GADF" (for "gamma-astro-data-formats").
     data_format_documentation : str, optional
         Link to the DL3 specifications documentation.
     data_format_version : str, optional
@@ -346,6 +349,7 @@ class HDUMetaData(MetaData):
 
     _tag: ClassVar[Literal["hdu"]] = "hdu"
 
+    extension_name: Optional[str] = None
     data_format: Optional[str] = None
     data_format_documentation: Optional[str] = None
     data_format_version: Optional[str] = None
