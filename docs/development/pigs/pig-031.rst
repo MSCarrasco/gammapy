@@ -6,7 +6,7 @@
 PIG 31 - Format-aware serialization and validation I/O
 *****************************************************
 
-* Author: Marie Carrasco
+* Author: Marie-Sophie Carrasco
 * Created: July 22nd, 2026
 * Status: Draft
 * Discussion: `GH XXXX`_
@@ -274,7 +274,7 @@ Implementation plan
 ===================
 
 The work is split into independently reviewable pull requests. A prototype
-covering all of them exists at `https://github.com/MSCarrasco/gammapy/tree/add_gadf_reader_writer`_.
+covering all of them exists at `_add_gadf_reader_writer`_.
 
 - [ ] **PR 1**: extract ``from_table`` from ``GTI.from_table_hdu`` and from
   ``EventListReader.from_gadf_hdu``. No new module, no behaviour change.
