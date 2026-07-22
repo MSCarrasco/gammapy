@@ -1,0 +1,357 @@
+.. include:: ../../references.txt
+
+.. _pig-031:
+
+*****************************************************
+PIG 31 - Format-aware serialization and validation I/O
+*****************************************************
+
+* Author: Marie Carrasco
+* Created: July 22nd, 2026
+* Status: Draft
+* Discussion: `GH XXXX`_
+
+Abstract
+========
+
+Gammapy reads and writes data products in the GADF format, but the knowledge of
+that format is distributed across the product classes themselves. There is no
+mechanism to check that a file is compliant, no awareness of the format version,
+and no place to add a second format without editing every product. This PIG
+proposes an I/O layer in which the description of a data format (header
+keywords, required keywords, column schemas) is declared in registries, and in
+which reader/writer objects mediate between files and Gammapy products. The
+immediate benefit is validation: the ability to answer whether a given file
+conforms to a given format and version, and to say precisely how it does not.
+The longer-term benefit is that supporting a second format becomes a matter of
+registering it.
+
+Motivation
+==========
+
+Current situation
+-----------------
+
+Format handling in Gammapy is implemented product by product. ``IRF.from_table``
+and ``IRF.to_table`` take a ``format="gadf-dl3"`` argument, ``Map.from_hdulist``
+parses the GADF skymap conventions, ``EventListReader`` branches on a
+``format`` string, and ``gammapy/irf/io.py`` dispatches IRF classes on the
+``HDUCLASn`` keyword hierarchy. Reading an observation therefore invokes several
+independent implementations of the same specification.
+
+This works, and it is well tested against the files the project uses. It has
+however four consequences that become limiting as the DL3 archives grow and as
+new formats appear.
+
+**No validation.** A file that violates the specification is read silently
+whenever the violation happens not to break the parsing. Missing mandatory
+keywords, wrong units, and wrong column dimensionality all pass unnoticed. There
+is currently no way to ask Gammapy whether a file is GADF compliant, which is a
+routine question when producing or receiving a DL3 archive.
+
+**No version awareness.** The mandatory keywords changed between GADF v0.2 and
+v0.3: the pointing keywords ``RA_PNT`` and ``DEC_PNT`` ceased to be
+unconditionally mandatory, and ``OBS_MODE`` was elevated to a required keyword
+with defined values [GADF-releases]_. Gammapy has no representation of this
+distinction, so it can neither validate against a chosen version nor report that
+a file mixes conventions.
+
+**Conditional requirements cannot be expressed.** In GADF v0.3, ``ALT_PNT`` and
+``AZ_PNT`` are mandatory if and only if ``OBS_MODE=DRIFT``, and the equatorial
+pointing keywords are mandatory otherwise [GADF-events]_. Such a rule has no
+natural home in the current code.
+
+**Format knowledge is duplicated.** Adding a format means touching every product
+class that can be serialised in it, which is a strong disincentive to
+supporting OGIP or, in the future, VODF.
+
+Relation to PIG 25
+------------------
+
+PIG 25 introduced pydantic-based ``MetaData`` containers attached to Gammapy
+products, covering the metadata that the *objects* carry (creator, observation
+information, time information) and their serialization to and from FITS headers
+[PIG25]_. That work is orthogonal to, and a prerequisite for, this proposal, and
+this PIG does not modify it.
+
+The distinction proposed here is the one between a *data model* and a *data
+format*:
+
+* the ``MetaData`` containers of PIG 25 describe what a product knows about
+  itself, independently of any file format;
+* the header models proposed here describe what a *file* of a given format and
+  version must contain, and are used to validate it.
+
+Concretely, ``ObservationMetaData`` answers "what is the observation
+information of this ``Observation``", whereas ``GADFEventsHeader`` answers "is
+this EVENTS HDU a valid GADF v0.3 EVENTS HDU, and if not, which keywords are
+missing". The two meet at a single point: the reader/writer builds the header
+model from the file, validates it, and then hands the metadata to the existing
+``MetaData.from_header`` machinery to populate the product. No duplication of
+the ``MetaData`` hierarchy is proposed.
+
+Requirements
+------------
+
+The proposed solution should:
+
+* validate a FITS file, or a single HDU, against a declared format and version,
+  reporting all violations rather than the first one;
+* be lenient by default, so that existing archives continue to be readable, and
+  strict on request;
+* keep format-specific knowledge out of the product classes;
+* allow a new format to be added without modifying the format-agnostic core;
+* reuse, and not replace, the existing ``MetaData`` containers and the existing
+  reconstruction of binned data by Gammapy.
+
+Proposed design
+===============
+
+Two layers
+----------
+
+The proposal introduces two modules:
+
+* ``gammapy/io/core.py``, format agnostic: base header models, base
+  reader/writers, the validation mechanics, and two empty registries;
+* ``gammapy/io/gadf.py``, GADF specific: the GADF header models, the column
+  schemas, the GADF reader/writers, and the code that populates the registries.
+
+The dependency runs one way only: the format module imports the core module,
+never the reverse. A future ``gammapy/io/ogip.py`` or ``gammapy/io/vodf.py``
+registers itself in the same way, with no modification of the core.
+
+Registries
+----------
+
+The core owns two dictionaries, empty at import, filled by the format modules::
+
+    DATA_FORMATS_MODELS = {}   # format -> rules and models
+    PRODUCT_MODELS = {}        # HDU class key -> Gammapy class
+
+The GADF module fills the first with, for a given format:
+
+* ``HEADER``: mapping of HDU class to pydantic header model, including a
+  ``BASE`` entry used as a fallback;
+* ``HEADER_REQUIRED``: version to HDU class to set of mandatory keywords;
+* ``HEADER_CONDITIONAL_REQUIRED``: version to HDU class to conditional rules;
+* ``TABLE``: version to HDU class to column schema;
+* ``READER_WRITER``: HDU class to reader/writer class;
+* ``HEADER_KEY`` and ``HDU_CLASS_KEY``: the format's own dispatch key resolvers.
+
+The last entry deserves a comment. Resolving which model applies to an HDU is
+itself format specific: GADF identifies IRFs through the ``HDUCLASn`` hierarchy,
+falls back on ``EXTNAME`` when ``HDUCLAS4`` is absent, and requires a workaround
+for the CTA-1DC files whose ``HDUCLAS4`` values are non-compliant. Injecting the
+resolver through the registry keeps this out of the core, which cannot know
+about it before the format has been detected.
+
+Header models
+-------------
+
+Header models are pydantic v2 models, one per HDU class, providing typing,
+aliasing of FITS keywords that are not valid Python identifiers
+(``DATE-OBS``), validation and serialization. They are lenient by default: all
+fields are optional and enforcement is driven by a validation context carrying
+the requested strictness and version.
+
+Keywords that are not declared fields are preserved in an ``_extras``
+dictionary and written back on serialization.
+
+Compliance is evaluated against the *file*, not against the model. A field
+carrying a default value that the file did not provide must be reported as
+missing, so presence is determined from the keywords actually read rather than
+from the resolved attribute values.
+
+Versioned and conditional requirements
+--------------------------------------
+
+Mandatory keywords are declared per version and per HDU class::
+
+    GADF_HEADER_REQUIRED = {
+        "0.2": {"EVENTS": _EVENTS_COMMON | {"RA_PNT", "DEC_PNT"},
+                "RESPONSE": _IRF_COMMON},
+        "0.3": {"EVENTS": _EVENTS_COMMON | {"OBS_MODE"},
+                "RESPONSE": _IRF_COMMON},
+    }
+
+Conditional requirements are declared as data rather than as branching logic::
+
+    GADF_HEADER_CONDITIONAL_REQUIRED = {
+        "0.2": {"EVENTS": []},
+        "0.3": {"EVENTS": [
+            ("OBS_MODE", "DRIFT", ["ALT_PNT", "AZ_PNT"], ["RA_PNT", "DEC_PNT"]),
+        ]},
+    }
+
+The version used for validation is the one requested by the caller, falling back
+on the value of ``HDUVERS`` found in the file and then on a default. The
+requested version takes precedence deliberately: in practice ``HDUVERS`` is not
+a reliable indicator of the conventions a file actually follows.
+
+Column schemas
+--------------
+
+Column definitions are declared as plain dictionaries, per version, giving the
+expected dtype, unit and per-row dimensionality, and whether the column is
+required. A version is derived from another by a deep copy followed by a patch,
+so that a difference between two versions is a one-line, reviewable change.
+Validation collects every offending column before raising, so a non-compliant
+table reports all its problems at once.
+
+Reader/writers
+--------------
+
+Three levels are proposed, mirroring the granularity of the files:
+
+* ``HDUReaderWriter``: one HDU. Detects the format, selects and builds the
+  header model, validates header and table independently, and selects the
+  format-specific reader/writer subclass;
+* ``HDUListReaderWriter``: a whole file. Iterates over the HDUs, keys them by a
+  stable identifier, and reports a per-HDU validation summary;
+* ``ProductReaderWriter``: a Gammapy product, obtained from the relevant HDUs.
+
+Header construction and validation are deliberately independent. A header whose
+construction fails, for instance because a keyword holds a value that cannot be
+coerced to its declared type, falls back to the format's base model and then to
+a neutral one, but the table of the same HDU is still validated on its own. A
+header that is built successfully but is not compliant is kept, and reported as
+non-compliant. This is what allows a legacy file to be read and diagnosed rather
+than rejected.
+
+Boundary with the existing code
+-------------------------------
+
+The framework validates metadata and tabular structure. It does not
+re-implement the reconstruction of binned data: maps and IRF maps are rebuilt by
+``Map.read`` and by the classes of ``IRF_REGISTRY``, which already handle the
+SKYMAP and BANDS HDU pair and the WCS and HEALPix pixelisations. The
+reader/writers delegate to them.
+
+Use cases
+=========
+
+Validating an archive file::
+
+    rw = HDUListReaderWriter.read(filename, format="GADF", version="0.3")
+
+produces a per-HDU report of the detected format, the version, and the header
+and table compliance, and can be run over a whole archive to qualify it before
+release.
+
+Reading strictly::
+
+    rw = HDUListReaderWriter.read(filename, strict=True)
+
+raises on the first non-compliance, which is the appropriate behaviour in a
+production pipeline that should not silently ingest malformed data.
+
+Reading through the existing entry points: ``Observation.read`` and
+``DataStore.get_observations`` gain validation without a change of signature.
+
+Backward compatibility
+======================
+
+The proposal is additive. No existing public method is removed, and the
+existing entry points keep their signatures.
+
+Validation defaults to lenient. Reading a non-compliant file logs warnings and
+returns the data, as it does today. Strictness is opt-in through a keyword
+argument. This is a deliberate constraint: a large fraction of the existing
+public DL3 files, including files distributed with Gammapy itself, are not
+fully compliant with the version they declare, and making validation strict by
+default would break them.
+
+The extraction of ``from_table`` from ``from_table_hdu`` (``GTI``) and from
+``from_gadf_hdu`` (``EventListReader``), proposed as the first step, changes no
+behaviour: it exposes as a separate method a block of code that already exists,
+so that the reader/writers can call it.
+
+A subsequent relocation of the serialization out of the product classes is
+discussed in the Questions section below, and is explicitly *not* proposed here.
+
+Implementation plan
+===================
+
+The work is split into independently reviewable pull requests. A prototype
+covering all of them exists at `https://github.com/MSCarrasco/gammapy/tree/add_gadf_reader_writer`_.
+
+- [ ] **PR 1**: extract ``from_table`` from ``GTI.from_table_hdu`` and from
+  ``EventListReader.from_gadf_hdu``. No new module, no behaviour change.
+- [ ] **PR 2**: add ``gammapy/utils/table_validator.py``. A standalone column
+  schema validator taking a dictionary and an ``astropy.table.Table``. No
+  coupling to the rest of the proposal, and testable on its own.
+- [ ] **PR 3**: add ``gammapy/io/core.py`` and ``gammapy/io/gadf.py`` with the
+  header models and the registries only, without column schemas. Tests cover
+  construction from a header, round-trip serialization, preservation of
+  non-standard keywords, and the required and conditional keyword checks.
+- [ ] **PR 4**: add the column schemas and connect the table validation to the
+  registries, including the derivation of v0.2 from v0.3.
+- [ ] **PR 5**: add the single-HDU reader/writers, the format detection and the
+  fallback cascade.
+- [ ] **PR 6**: add ``HDUListReaderWriter`` and the per-HDU validation report.
+- [ ] **PR 7**: integrate into ``Observation.read`` and ``HDULocation.load``,
+  so that both the file-based and the ``DataStore`` paths are covered. This is
+  the only PR of the series that alters an existing code path, and it should be
+  reviewed with that in mind.
+- [ ] **PR 8**: add ``ProductReaderWriter``.
+- [ ] **PR 9**: documentation, and a tutorial showing how to validate a DL3
+  file.
+
+Each PR is expected to land with its own tests. A regression test running the
+reader over the files of ``gammapy-data`` and recording the validation verdict
+is proposed as part of PR 6: it gives a reference point for the compliance of
+the distributed files, and it catches changes in the validation behaviour.
+
+Questions
+=========
+
+**Relocating serialization out of the products.** The reader/writer layer makes
+it possible to move ``to_table``, ``from_table``, ``to_hdulist`` and
+``from_hdulist`` out of the product classes and into format-specific
+reader/writers, keyed on (product, format, version). This is the change that
+would make a second format genuinely cheap, and it follows a pattern already
+present in Gammapy: ``DatasetReader`` and ``DatasetWriter`` with their format
+``tag`` in ``gammapy/datasets/io.py``, and ``EventListReader`` and
+``EventListWriter`` in ``gammapy/data/io.py``. It also affects of the order of
+twenty classes and modifies public API, so it is deliberately left out of this
+PIG and should be discussed separately.
+
+**Deprecation of** ``CreatorMetaData``. Part of the information carried by this
+class overlaps with the header models. A deprecation path should be decided,
+in coordination with the CTAO work on the encoding of comments and units.
+
+**Metadata propagation.** What metadata should survive data reduction from DL3
+to DL4 and DL5, and what should be aggregated or dropped, is not a serialization
+question but a data model question. It has to be settled before the framework
+can be extended to the datasets and to DL5, since deciding it late means
+encoding it twice.
+
+**POINTING HDU.** GADF v0.3 defines a POINTING HDU carrying time-dependent
+pointing as a table [GADF-pointing]_, which is distinct from the fixed pointing
+that ``FixedPointingInfo`` derives from the EVENTS header keywords. The framework
+reads and validates the HDU, but no Gammapy class currently represents a
+time-dependent pointing. The mandatory keywords of that HDU are also not
+enumerated by the specification, so its header validation is currently lenient.
+
+**Ambiguous EXTNAME values.** ``EXTNAME`` is not standardised for the DL3 IRFs,
+and the two background IRFs share the value ``BACKGROUND``. The fallback used
+when ``HDUCLAS4`` is absent therefore cannot distinguish ``bkg_2d`` from
+``bkg_3d``, and such an HDU is left unresolved rather than guessed.
+
+Decision
+========
+
+To be completed after discussion.
+
+.. [PIG25] `PIG 25 - Metadata container for Gammapy
+   <https://docs.gammapy.org/dev/development/pigs/pig-025.html>`_
+.. [GADF-events] `GADF v0.3, EVENTS
+   <https://gamma-astro-data-formats.readthedocs.io/en/v0.3/events/events.html>`_
+.. [GADF-pointing] `GADF v0.3, POINTING
+   <https://gamma-astro-data-formats.readthedocs.io/en/v0.3/events/pointing.html>`_
+.. [GADF-releases] `GADF releases
+   <https://github.com/open-gamma-ray-astro/gamma-astro-data-formats/releases>`_
+
+.. _add_gadf_reader_writer: https://github.com/MSCarrasco/gammapy/tree/add_gadf_reader_writer
+.. _GH XXXX: https://github.com/gammapy/gammapy/pull/XXXX
