@@ -240,12 +240,10 @@ class DefinitionValidator:
         header = header or {}
         required = [n for n, s in self.definition.items() if s.get("required")]
         optional = [n for n, s in self.definition.items() if not s.get("required")]
-        for name in required:
-            if name not in columns:
-                errors.append(f"missing required column {name!r}")
-                continue
-            errors += _check_column(name, columns[name], self.definition[name])
-        for name in optional:
+        missing = [name for name in required if name not in columns]
+        if missing:
+            errors.append(f"Missing mandatory column(s): {missing}")
+        for name in required + optional:
             if name in columns:
                 errors += _check_column(name, columns[name], self.definition[name])
         errors += self._check_conditions(lambda name: name in columns, header)

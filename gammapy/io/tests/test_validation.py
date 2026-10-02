@@ -207,7 +207,13 @@ def test_check_table_missing_required():
     table = make_xy_table()
     table.remove_column("Y")
     errors = DefinitionValidator(COLUMN_DEFINITION).check_table(table)
-    assert errors == ["missing required column 'Y'"]
+    assert errors == ["Missing mandatory column(s): ['Y']"]
+
+
+def test_check_table_missing_columns_grouped():
+    """All missing required columns are reported in one message, like keywords."""
+    errors = DefinitionValidator(COLUMN_DEFINITION).check_table(Table())
+    assert errors == ["Missing mandatory column(s): ['X', 'Y']"]
 
 
 def test_check_table_ndim():
@@ -463,6 +469,24 @@ def test_errors_logged_unless_disabled(caplog):
     assert caplog.text == ""
 
 
+def test_errors_logged_to_file(tmp_path):
+    """Errors go through the standard logging module: a FileHandler saves them."""
+    logfile = tmp_path / "validation.log"
+    handler = logging.FileHandler(logfile)
+    logger = logging.getLogger("gammapy.io.validation")
+    logger.addHandler(handler)
+    try:
+        FormatValidator("GADF", "0.3").validate_meta(
+            events_meta(drop=("OBS_ID",)), hdu="EVENTS"
+        )
+    finally:
+        logger.removeHandler(handler)
+        handler.close()
+    assert logfile.read_text() == (
+        "EVENTS: header: Missing mandatory keyword(s): ['OBS_ID']\n"
+    )
+
+
 def test_report_str():
     report = ValidationReport(
         hdu="EVENTS",
@@ -560,7 +584,7 @@ def test_validate_hdus_mislabelled(tmp_path):
     make_events_table().write(filename)
     (report,) = validate_hdus([(filename, 1, "GTI")], format="GADF", version="0.3")
     assert report.hdu == "GTI"
-    assert "missing required column 'START'" in report.table_errors
+    assert report.table_errors == ["Missing mandatory column(s): ['START', 'STOP']"]
 
 
 # ---------------------------------------------------------------------------
