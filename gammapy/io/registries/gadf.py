@@ -4,8 +4,12 @@
 Pure data (plus the small builders that assemble it). Everything is keyed by
 format version and HDU class key, e.g. ``GADF_PRODUCTS_HEADER_DEFINITION["0.3"]["EVENTS"]``.
 This module imports only from ``gammapy.io.registries`` and registers GADF
-there (definitions and HDU class-key resolver); the reader/writers and the
-registration into ``DATA_FORMATS_MODELS`` live in ``gammapy.io.gadf``.
+there (definitions and HDU class-key resolver).
+
+Column ``dtype`` entries are given only where the GADF specification gives a
+column type (event lists, GTI, pointing, WCS BANDS columns), and they are then
+checked. The IRF and most BANDS column specifications give ``ndim`` and ``unit``
+only, so their definitions carry no ``dtype``.
 """
 
 import copy
@@ -22,13 +26,15 @@ from gammapy.io.registries.fits import (
 # --------------------------------------------------------------------------
 # DL3 event-level tables
 # --------------------------------------------------------------------------
+# Column types as in the GADF events page: EVENT_ID int64, TIME float64,
+# EVENT_TYPE a bit field (FITS TFORM "32X"); "float" / "int" without a width.
 GADF_V02_EVENT_TABLE_DEFINITION = {
-    "EVENT_ID": {"dtype": "int", "required": True, "unit": None},
-    "TIME": {"dtype": "float", "required": True, "unit": "s"},
+    "EVENT_ID": {"dtype": "int64", "required": True, "unit": None},
+    "TIME": {"dtype": "float64", "required": True, "unit": "s"},
     "RA": {"dtype": "float", "required": True, "unit": "deg"},
     "DEC": {"dtype": "float", "required": True, "unit": "deg"},
     "ENERGY": {"dtype": "float", "required": True, "unit": "TeV"},
-    "EVENT_TYPE": {"dtype": "int8"},
+    "EVENT_TYPE": {"dtype": "bit"},
     "MULTIP": {"dtype": "int"},
     "GLON": {"dtype": "float", "unit": "deg"},
     "GLAT": {"dtype": "float", "unit": "deg"},
@@ -38,7 +44,6 @@ GADF_V02_EVENT_TABLE_DEFINITION = {
     "DETY": {"dtype": "float", "unit": "deg"},
     "THETA": {"dtype": "float", "unit": "deg"},
     "PHI": {"dtype": "float", "unit": "deg"},
-    "GAMMANESS": {"dtype": "float"},
     "DIR_ERR": {"dtype": "float", "unit": "deg"},
     "ENERGY_ERR": {"dtype": "float", "unit": "TeV"},
     "COREX": {"dtype": "float", "unit": "m"},
@@ -53,12 +58,12 @@ GADF_V02_EVENT_TABLE_DEFINITION = {
 }
 
 GADF_V02_GTI_TABLE_DEFINITION = {
-    "START": {"dtype": "float", "required": True, "unit": "s"},
-    "STOP": {"dtype": "float", "required": True, "unit": "s"},
+    "START": {"dtype": "float64", "required": True, "unit": "s"},
+    "STOP": {"dtype": "float64", "required": True, "unit": "s"},
 }
 
 GADF_V02_POINTING_TABLE_DEFINITION = {
-    "TIME": {"dtype": "float", "required": True, "unit": "s"},
+    "TIME": {"dtype": "float64", "required": True, "unit": "s"},
     "RA_PNT": {"dtype": "float", "required": True, "unit": "deg"},
     "DEC_PNT": {"dtype": "float", "required": True, "unit": "deg"},
     "ALT_PNT": {"dtype": "float", "unit": "deg"},
@@ -68,101 +73,103 @@ GADF_V02_POINTING_TABLE_DEFINITION = {
 # --------------------------------------------------------------------------
 # DL3 IRF tables
 # --------------------------------------------------------------------------
+# The GADF IRF pages give ndim and unit only: no column dtype.
 GADF_V02_AEFF_2D_TABLE_DEFINITION = {
-    "ENERG_LO": {"dtype": "float", "required": True, "unit": "TeV", "ndim": 1},
-    "ENERG_HI": {"dtype": "float", "required": True, "unit": "TeV", "ndim": 1},
-    "THETA_LO": {"dtype": "float", "required": True, "unit": "deg", "ndim": 1},
-    "THETA_HI": {"dtype": "float", "required": True, "unit": "deg", "ndim": 1},
-    "EFFAREA": {"dtype": "float", "required": True, "unit": "m2", "ndim": 2},
+    "ENERG_LO": {"required": True, "unit": "TeV", "ndim": 1},
+    "ENERG_HI": {"required": True, "unit": "TeV", "ndim": 1},
+    "THETA_LO": {"required": True, "unit": "deg", "ndim": 1},
+    "THETA_HI": {"required": True, "unit": "deg", "ndim": 1},
+    "EFFAREA": {"required": True, "unit": "m2", "ndim": 2},
 }
 
 GADF_V02_EDISP_2D_TABLE_DEFINITION = {
-    "ENERG_LO": {"dtype": "float", "required": True, "unit": "TeV", "ndim": 1},
-    "ENERG_HI": {"dtype": "float", "required": True, "unit": "TeV", "ndim": 1},
-    "MIGRA_LO": {"dtype": "float", "required": True, "unit": "", "ndim": 1},
-    "MIGRA_HI": {"dtype": "float", "required": True, "unit": "", "ndim": 1},
-    "THETA_LO": {"dtype": "float", "required": True, "unit": "deg", "ndim": 1},
-    "THETA_HI": {"dtype": "float", "required": True, "unit": "deg", "ndim": 1},
-    "MATRIX": {"dtype": "float", "required": True, "unit": "", "ndim": 3},
+    "ENERG_LO": {"required": True, "unit": "TeV", "ndim": 1},
+    "ENERG_HI": {"required": True, "unit": "TeV", "ndim": 1},
+    "MIGRA_LO": {"required": True, "unit": "", "ndim": 1},
+    "MIGRA_HI": {"required": True, "unit": "", "ndim": 1},
+    "THETA_LO": {"required": True, "unit": "deg", "ndim": 1},
+    "THETA_HI": {"required": True, "unit": "deg", "ndim": 1},
+    "MATRIX": {"required": True, "unit": "", "ndim": 3},
 }
 
 GADF_V02_PSF_2D_TABLE_DEFINITION = {
-    "ENERG_LO": {"dtype": "float", "required": True, "unit": "TeV", "ndim": 1},
-    "ENERG_HI": {"dtype": "float", "required": True, "unit": "TeV", "ndim": 1},
-    "THETA_LO": {"dtype": "float", "required": True, "unit": "deg", "ndim": 1},
-    "THETA_HI": {"dtype": "float", "required": True, "unit": "deg", "ndim": 1},
-    "RAD_LO": {"dtype": "float", "required": True, "unit": "deg", "ndim": 1},
-    "RAD_HI": {"dtype": "float", "required": True, "unit": "deg", "ndim": 1},
-    "RPSF": {"dtype": "float", "required": True, "unit": "sr-1", "ndim": 3},
+    "ENERG_LO": {"required": True, "unit": "TeV", "ndim": 1},
+    "ENERG_HI": {"required": True, "unit": "TeV", "ndim": 1},
+    "THETA_LO": {"required": True, "unit": "deg", "ndim": 1},
+    "THETA_HI": {"required": True, "unit": "deg", "ndim": 1},
+    "RAD_LO": {"required": True, "unit": "deg", "ndim": 1},
+    "RAD_HI": {"required": True, "unit": "deg", "ndim": 1},
+    "RPSF": {"required": True, "unit": "sr-1", "ndim": 3},
 }
 
 GADF_V02_PSF_3GAUSS_TABLE_DEFINITION = {
-    "ENERG_LO": {"dtype": "float", "required": True, "unit": "TeV", "ndim": 1},
-    "ENERG_HI": {"dtype": "float", "required": True, "unit": "TeV", "ndim": 1},
-    "THETA_LO": {"dtype": "float", "required": True, "unit": "deg", "ndim": 1},
-    "THETA_HI": {"dtype": "float", "required": True, "unit": "deg", "ndim": 1},
-    "SCALE": {"dtype": "float", "required": True, "unit": "", "ndim": 2},
-    "SIGMA_1": {"dtype": "float", "required": True, "unit": "deg", "ndim": 2},
-    "SIGMA_2": {"dtype": "float", "required": True, "unit": "deg", "ndim": 2},
-    "SIGMA_3": {"dtype": "float", "required": True, "unit": "deg", "ndim": 2},
-    "AMPL_2": {"dtype": "float", "required": True, "unit": "", "ndim": 2},
-    "AMPL_3": {"dtype": "float", "required": True, "unit": "", "ndim": 2},
+    "ENERG_LO": {"required": True, "unit": "TeV", "ndim": 1},
+    "ENERG_HI": {"required": True, "unit": "TeV", "ndim": 1},
+    "THETA_LO": {"required": True, "unit": "deg", "ndim": 1},
+    "THETA_HI": {"required": True, "unit": "deg", "ndim": 1},
+    "SCALE": {"required": True, "unit": "", "ndim": 2},
+    "SIGMA_1": {"required": True, "unit": "deg", "ndim": 2},
+    "SIGMA_2": {"required": True, "unit": "deg", "ndim": 2},
+    "SIGMA_3": {"required": True, "unit": "deg", "ndim": 2},
+    "AMPL_2": {"required": True, "unit": "", "ndim": 2},
+    "AMPL_3": {"required": True, "unit": "", "ndim": 2},
 }
 
 GADF_V02_PSF_KING_TABLE_DEFINITION = {
-    "ENERG_LO": {"dtype": "float", "required": True, "unit": "TeV", "ndim": 1},
-    "ENERG_HI": {"dtype": "float", "required": True, "unit": "TeV", "ndim": 1},
-    "THETA_LO": {"dtype": "float", "required": True, "unit": "deg", "ndim": 1},
-    "THETA_HI": {"dtype": "float", "required": True, "unit": "deg", "ndim": 1},
-    "GAMMA": {"dtype": "float", "required": True, "unit": "", "ndim": 2},
-    "SIGMA": {"dtype": "float", "required": True, "unit": "", "ndim": 2},
+    "ENERG_LO": {"required": True, "unit": "TeV", "ndim": 1},
+    "ENERG_HI": {"required": True, "unit": "TeV", "ndim": 1},
+    "THETA_LO": {"required": True, "unit": "deg", "ndim": 1},
+    "THETA_HI": {"required": True, "unit": "deg", "ndim": 1},
+    "GAMMA": {"required": True, "unit": "", "ndim": 2},
+    "SIGMA": {"required": True, "unit": "", "ndim": 2},
 }
 
 GADF_V02_PSF_TABLE_DEFINITION = {
-    "ENERGY": {"dtype": "float", "required": True, "unit": "MeV", "ndim": 1},
-    "EXPOSURE": {"dtype": "float", "required": True, "unit": "cm2 s", "ndim": 1},
-    "PSF": {"dtype": "float", "required": True, "unit": "", "ndim": 2},
+    "ENERGY": {"required": True, "unit": "MeV", "ndim": 1},
+    "EXPOSURE": {"required": True, "unit": "cm2 s", "ndim": 1},
+    "PSF": {"required": True, "unit": "", "ndim": 2},
 }
 
 GADF_V02_THETA_TABLE_DEFINITION = {
-    "THETA": {"dtype": "float", "required": True, "unit": "deg", "ndim": 1},
+    "THETA": {"required": True, "unit": "deg", "ndim": 1},
 }
 
 GADF_V02_BKG_2D_TABLE_DEFINITION = {
-    "ENERG_LO": {"dtype": "float", "required": True, "unit": "TeV", "ndim": 1},
-    "ENERG_HI": {"dtype": "float", "required": True, "unit": "TeV", "ndim": 1},
-    "THETA_LO": {"dtype": "float", "required": True, "unit": "deg", "ndim": 1},
-    "THETA_HI": {"dtype": "float", "required": True, "unit": "deg", "ndim": 1},
-    "BKG": {"dtype": "float", "required": True, "unit": "s-1 MeV-1 sr-1", "ndim": 2},
+    "ENERG_LO": {"required": True, "unit": "TeV", "ndim": 1},
+    "ENERG_HI": {"required": True, "unit": "TeV", "ndim": 1},
+    "THETA_LO": {"required": True, "unit": "deg", "ndim": 1},
+    "THETA_HI": {"required": True, "unit": "deg", "ndim": 1},
+    "BKG": {"required": True, "unit": "s-1 MeV-1 sr-1", "ndim": 2},
 }
 
 GADF_V02_BKG_3D_TABLE_DEFINITION = {
-    "ENERG_LO": {"dtype": "float", "required": True, "unit": "TeV", "ndim": 1},
-    "ENERG_HI": {"dtype": "float", "required": True, "unit": "TeV", "ndim": 1},
-    "DETX_LO": {"dtype": "float", "required": True, "unit": "deg", "ndim": 1},
-    "DETX_HI": {"dtype": "float", "required": True, "unit": "deg", "ndim": 1},
-    "DETY_LO": {"dtype": "float", "required": True, "unit": "deg", "ndim": 1},
-    "DETY_HI": {"dtype": "float", "required": True, "unit": "deg", "ndim": 1},
-    "BKG": {"dtype": "float", "required": True, "unit": "s-1 MeV-1 sr-1", "ndim": 3},
+    "ENERG_LO": {"required": True, "unit": "TeV", "ndim": 1},
+    "ENERG_HI": {"required": True, "unit": "TeV", "ndim": 1},
+    "DETX_LO": {"required": True, "unit": "deg", "ndim": 1},
+    "DETX_HI": {"required": True, "unit": "deg", "ndim": 1},
+    "DETY_LO": {"required": True, "unit": "deg", "ndim": 1},
+    "DETY_HI": {"required": True, "unit": "deg", "ndim": 1},
+    "BKG": {"required": True, "unit": "s-1 MeV-1 sr-1", "ndim": 3},
 }
 
 GADF_V02_RAD_MAX_2D_TABLE_DEFINITION = {
-    "ENERG_LO": {"dtype": "float", "required": True, "unit": "TeV", "ndim": 1},
-    "ENERG_HI": {"dtype": "float", "required": True, "unit": "TeV", "ndim": 1},
-    "THETA_LO": {"dtype": "float", "required": True, "unit": "deg", "ndim": 1},
-    "THETA_HI": {"dtype": "float", "required": True, "unit": "deg", "ndim": 1},
-    "RAD_MAX": {"dtype": "float", "required": True, "unit": "deg", "ndim": 2},
+    "ENERG_LO": {"required": True, "unit": "TeV", "ndim": 1},
+    "ENERG_HI": {"required": True, "unit": "TeV", "ndim": 1},
+    "THETA_LO": {"required": True, "unit": "deg", "ndim": 1},
+    "THETA_HI": {"required": True, "unit": "deg", "ndim": 1},
+    "RAD_MAX": {"required": True, "unit": "deg", "ndim": 2},
 }
 
 # --------------------------------------------------------------------------
 # DL4 Map tables
 # --------------------------------------------------------------------------
+# BANDS: GADF gives ndim (and unit) only, except the WCS columns below.
 GADF_V02_BANDS_TABLE_DEFINITION = {
-    "CHANNEL": {"dtype": "int", "required": True, "unit": "", "ndim": 1},
-    "E_MIN": {"dtype": "float", "required": False, "unit": "keV", "ndim": 1},
-    "E_MAX": {"dtype": "float", "required": False, "unit": "keV", "ndim": 1},
-    "ENERGY": {"dtype": "float", "required": False, "unit": "keV", "ndim": 1},
-    "EVENT_TYPE": {"dtype": "int", "required": False, "unit": "", "ndim": 1},
+    "CHANNEL": {"required": True, "unit": "", "ndim": 1},
+    "E_MIN": {"required": False, "unit": "keV", "ndim": 1},
+    "E_MAX": {"required": False, "unit": "keV", "ndim": 1},
+    "ENERGY": {"required": False, "unit": "keV", "ndim": 1},
+    "EVENT_TYPE": {"required": False, "unit": "", "ndim": 1},
 }
 
 GADF_V02_WCS_TABLE_DEFINITION = {
@@ -172,7 +179,7 @@ GADF_V02_WCS_TABLE_DEFINITION = {
 }
 
 GADF_V02_HPX_TABLE_DEFINITION = {
-    "NSIDE": {"dtype": "int", "required": True, "unit": "", "ndim": 1},
+    "NSIDE": {"required": True, "unit": "", "ndim": 1},
 }
 
 # --------------- IRF DL3 HDU SPECIFICATION ---------------
@@ -311,6 +318,7 @@ _GADF_V02_TABLE = {
 
 _GADF_V03_TABLE = copy.deepcopy(_GADF_V02_TABLE)
 _GADF_V03_TABLE["PSF_3GAUSS"]["SCALE"]["unit"] = "sr-1"
+_GADF_V03_TABLE["EVENTS"]["GAMMANESS"] = {"dtype": "float"}
 
 # Nested registry: version -> HDU -> column-definition YAML.
 GADF_PRODUCTS_TABLE_DEFINITION = {
@@ -327,7 +335,7 @@ GADF_HDUDOC = {
 # GADF HEADER KEYWORD DEFINITIONS
 # Same layout as the table definitions: version -> HDU class key -> {keyword: spec}.
 # Spec entries (dtype, required, required_if, required_unless, allowed,
-# default, unit, comment) are documented in core.
+# default, unit, comment) are documented in gammapy.io.registries.
 # =====================================================================
 
 # --------------- GADF keyword blocks (all optional here) ---------------
@@ -470,7 +478,6 @@ def _gadf_header_definitions(version):
         return _gadf_hdu_keywords(version, hduclas1)
 
     headers = {
-        "BASE": hdu(),
         "EVENTS": compose_header(
             hdu("EVENTS"),
             GENERAL_KEYWORDS,
@@ -514,6 +521,8 @@ def _gadf_header_definitions(version):
             required=_IRF_REQUIRED + _IRF_TAG_REQUIRED.get(tag, ()),
         )
     headers["PSF"] = headers["GTPSF"]  # GTPSF table class key, see GADF_IRF_CLASS_KEYS
+    # THETA axis HDU of a GTPSF file: no keywords specified for it beyond HDUCLASn
+    headers["THETA"] = hdu()
     return headers
 
 

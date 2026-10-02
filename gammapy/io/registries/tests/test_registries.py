@@ -70,7 +70,6 @@ def test_versions_complete(version):
     assert version in GADF_HDUDOC
     headers = GADF_PRODUCTS_HEADER_DEFINITION[version]
     tables = GADF_PRODUCTS_TABLE_DEFINITION[version]
-    assert "BASE" in headers
     # every DL3 IRF class has a header and a table definition
     for spec in GADF_IRF_DL3_HDU_SPECIFICATION.values():
         key = spec["mandatory_keywords"]["HDUCLAS4"].upper()
@@ -144,6 +143,42 @@ def test_irf_required(version):
     assert required(version, "AEFF_2D") == irf
     assert required(version, "BKG_3D") == irf | {"FOVALIGN"}
     assert required(version, "BKG_2D") == irf | {"FOVALIGN"}
+
+
+def test_column_dtypes_from_gadf():
+    """dtype only where GADF gives a column type (events, GTI, pointing, WCS bands)."""
+    typed = {"EVENTS", "GTI", "POINTING", "IMAGE"}
+    for version, tables in GADF_PRODUCTS_TABLE_DEFINITION.items():
+        for key, columns in tables.items():
+            has_dtype = {name for name, spec in columns.items() if "dtype" in spec}
+            if key in typed:
+                assert has_dtype == set(columns), (version, key)
+            else:
+                assert not has_dtype, (version, key)
+
+    events = GADF_PRODUCTS_TABLE_DEFINITION["0.3"]["EVENTS"]
+    assert events["EVENT_ID"]["dtype"] == "int64"
+    assert events["TIME"]["dtype"] == "float64"
+    assert events["RA"]["dtype"] == "float"
+    assert events["EVENT_TYPE"]["dtype"] == "bit"
+    for version in VERSIONS:
+        tables = GADF_PRODUCTS_TABLE_DEFINITION[version]
+        assert tables["GTI"]["START"]["dtype"] == "float64"
+        assert tables["POINTING"]["TIME"]["dtype"] == "float64"
+
+
+def test_gammaness_v03_only():
+    assert "GAMMANESS" not in GADF_PRODUCTS_TABLE_DEFINITION["0.2"]["EVENTS"]
+    assert "GAMMANESS" in GADF_PRODUCTS_TABLE_DEFINITION["0.3"]["EVENTS"]
+
+
+@pytest.mark.parametrize("version", VERSIONS)
+def test_every_table_class_has_header(version):
+    """No table class key is left without a header definition."""
+    tables = GADF_PRODUCTS_TABLE_DEFINITION[version]
+    headers = GADF_PRODUCTS_HEADER_DEFINITION[version]
+    assert set(tables) <= set(headers)
+    assert "BASE" not in headers
 
 
 def test_table_v03_derived_from_v02():

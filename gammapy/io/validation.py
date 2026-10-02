@@ -46,8 +46,9 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
-# TFORMn: repeat count and type code, e.g. "6E", "1PE(100)"
-_TFORM = re.compile(r"^\s*(\d*)\s*([A-Za-z])")
+# TFORMn: repeat count, type code and, for variable-length arrays, the element
+# type code, e.g. "6E", "1PE(100)"
+_TFORM = re.compile(r"^\s*(\d*)\s*([A-Za-z])([A-Za-z]?)")
 
 
 # --------------- HELPERS ---------------
@@ -68,9 +69,9 @@ def _hdu_class_key(meta):
 
 
 def header_definition(format, version, class_key):
-    """Keyword definition for (format, version, HDU class key); {} if none."""
+    """Keyword definition for (format, version, HDU class key); None if none."""
     headers = DATA_FORMATS_MODELS.get(format, {}).get("HEADER", {}).get(version, {})
-    return headers.get(class_key) or headers.get("BASE") or {}
+    return headers.get(class_key)
 
 
 # --------------- DEFINITION VALIDATOR ---------------
@@ -105,18 +106,94 @@ def _check_keyword(name, value, spec):
 
 
 class ColumnDescription(NamedTuple):
-    """What the column checks need to know about a column: per-row ndim and unit."""
+    """What the column checks need to know about a column.
+
+    Attributes
+    ----------
+    ndim : int
+        Number of dimensions per row.
+    unit : `~astropy.units.UnitBase` or None
+        Column unit.
+    dtype : `numpy.dtype` or None
+        Data type of the values (of the array elements for a variable-length
+        array column); None if unknown.
+    bit_field : bool or None
+        True for a FITS bit-field column (TFORM ``X``), False for any other FITS
+        column, None if unknown: an in-memory table does not keep the TFORM, and
+        astropy reads both ``X`` and ``L`` columns as booleans.
+    """
 
     ndim: int
     unit: Optional[u.UnitBase]
+    dtype: Optional[np.dtype] = None
+    bit_field: Optional[bool] = None
+
+
+def _table_column_dtype(column):
+    """Value dtype of a table column; element dtype for variable-length arrays."""
+    if column.dtype.kind == "O":
+        for value in column:
+            if value is not None and hasattr(value, "dtype"):
+                return value.dtype
+        return None
+    return column.dtype
 
 
 def columns_from_table(table):
     """Column descriptions of an in-memory `~astropy.table.Table`."""
     return {
-        name: ColumnDescription(ndim=table[name].ndim - 1, unit=table[name].unit)
+        name: ColumnDescription(
+            ndim=table[name].ndim - 1,
+            unit=table[name].unit,
+            dtype=_table_column_dtype(table[name]),
+        )
         for name in table.colnames
     }
+
+
+# TFORM type codes -> numpy dtype, as read by astropy.io.fits (FITS standard,
+# Pence et al. 2010, Table 18). "X" (bit) and "A" (string) are handled apart.
+_TFORM_DTYPES = {
+    "L": "bool",
+    "B": "uint8",
+    "I": "int16",
+    "J": "int32",
+    "K": "int64",
+    "E": "float32",
+    "D": "float64",
+    "C": "complex64",
+    "M": "complex128",
+}
+
+# TZERO offsets for non-default integer types (FITS standard, Pence et al. 2010,
+# Table 19): signed bytes and unsigned 16/32/64-bit integers. Any other TZERO /
+# TSCAL gives scaled float64 values. Note: astropy reads a "B" column with
+# TZERO=-128 as float64; the standard (and this check) treat it as int8.
+_INTEGER_TZERO = {
+    "B": (-128, "int8"),
+    "I": (2**15, "uint16"),
+    "J": (2**31, "uint32"),
+    "K": (2**63, "uint64"),
+}
+
+
+def _header_column_dtype(code, inner, tzero, tscal):
+    """Value dtype of a binary table column from its TFORM / TZERO / TSCAL."""
+    if code in ("P", "Q"):  # variable-length array: dtype of its elements
+        code = inner
+    if code == "A":
+        return np.dtype("S")
+    if code == "X":
+        return np.dtype("bool")
+    if code not in _TFORM_DTYPES:
+        return None
+    scaled = (tzero not in (None, 0)) or (tscal not in (None, 1))
+    if scaled and code in "BIJK":
+        offset, integer = _INTEGER_TZERO[code]
+        if tzero == offset and tscal in (None, 1):
+            return np.dtype(integer)
+        return np.dtype("float64")
+    return np.dtype(_TFORM_DTYPES[code])
 
 
 def _tdim(value):
@@ -127,9 +204,10 @@ def _tdim(value):
 def columns_from_header(header):
     """Column descriptions of a binary table, read from its FITS header only.
 
-    Uses the ``TFIELDS``, ``TTYPEn``, ``TFORMn``, ``TDIMn`` and ``TUNITn``
-    keywords, so no table data is read. The per-row ``ndim`` and the unit are
-    those `~astropy.table.Table.read` gives the column.
+    Uses the ``TFIELDS``, ``TTYPEn``, ``TFORMn``, ``TDIMn``, ``TUNITn``,
+    ``TZEROn`` and ``TSCALn`` keywords, so no table data is read. The per-row
+    ``ndim``, the unit and the dtype are those `~astropy.table.Table.read` gives
+    the column; ``bit_field`` tells bit-field columns (TFORM ``X``) apart.
     """
     columns = {}
     for idx in range(1, int(header.get("TFIELDS", 0)) + 1):
@@ -139,6 +217,7 @@ def columns_from_header(header):
         match = _TFORM.match(str(header.get(f"TFORM{idx}", "")))
         repeat = int(match.group(1) or 1) if match else 1
         code = match.group(2).upper() if match else ""
+        inner = match.group(3).upper() if match else ""
         tdim = header.get(f"TDIM{idx}")
         if code in ("P", "Q"):  # variable-length array: one object per row
             ndim = 0
@@ -156,14 +235,56 @@ def columns_from_header(header):
             if tunit not in (None, "")
             else None
         )
-        columns[str(name)] = ColumnDescription(ndim=ndim, unit=unit)
+        dtype = _header_column_dtype(
+            code, inner, header.get(f"TZERO{idx}"), header.get(f"TSCAL{idx}")
+        )
+        columns[str(name)] = ColumnDescription(
+            ndim=ndim, unit=unit, dtype=dtype, bit_field=code == "X"
+        )
     return columns
 
 
-def _check_column(name, column, spec):
-    """Errors of one column (a `ColumnDescription`) against its spec (ndim, unit).
+_COLUMN_KINDS = {
+    "int": lambda dt: np.issubdtype(dt, np.integer),
+    "float": lambda dt: np.issubdtype(dt, np.floating),
+    "bool": lambda dt: dt.kind == "b",
+    "str": lambda dt: dt.kind in "SU",
+}
 
-    The column ``dtype`` is not checked. A spec without ``unit`` expects a
+
+def _column_has_dtype(column, name):
+    """Whether a column matches one dtype name of a column spec.
+
+    * "int", "float", "bool", "str": any type of that kind (any width);
+    * "bit": a FITS bit field (TFORM ``X``); for an in-memory table, where the
+      TFORM is not known, any boolean column;
+    * any other name, e.g. "int64", "float64": that exact numpy type.
+    """
+    dtype = column.dtype
+    if name == "bit":
+        if column.bit_field is not None:
+            return column.bit_field
+        return dtype is not None and dtype.kind == "b"
+    if column.bit_field:  # a bit field matches only "bit"
+        return False
+    if name in _COLUMN_KINDS:
+        return _COLUMN_KINDS[name](dtype)
+    return dtype.newbyteorder("=") == np.dtype(name)
+
+
+def _dtype_name(column):
+    if column.bit_field:
+        return "bit"
+    if column.dtype.kind in "SU":
+        return "str"
+    return column.dtype.newbyteorder("=").name
+
+
+def _check_column(name, column, spec):
+    """Errors of one column (a `ColumnDescription`) against its spec.
+
+    Checks ``ndim``, ``dtype`` (a name or a list of accepted names, see
+    `_column_has_dtype`) and ``unit``. A spec without ``unit`` expects a
     dimensionless column; units are compared by equivalence.
     """
     errors = []
@@ -172,6 +293,19 @@ def _check_column(name, column, spec):
         errors.append(
             f"{name}: Column ndim incorrect. Expected {ndim}, got {column.ndim}."
         )
+    dtype = spec.get("dtype")
+    if dtype is not None and column.dtype is not None:
+        names = [dtype] if isinstance(dtype, str) else list(dtype)
+        try:
+            ok = any(_column_has_dtype(column, n) for n in names)
+        except TypeError as e:
+            return errors + [f"{name}: invalid dtype {dtype!r} in definition: {e}"]
+        if not ok:
+            expected = names[0] if len(names) == 1 else names
+            errors.append(
+                f"{name}: Column dtype incorrect. "
+                f"Expected {expected}, got {_dtype_name(column)}."
+            )
     try:
         unit = spec.get("unit")
         expected = u.one if unit is None else u.Unit(unit)
@@ -196,7 +330,7 @@ class DefinitionValidator:
     header); the per-item checks differ:
 
     * keywords: ``dtype`` (Python type of the value) and ``allowed``;
-    * columns: ``ndim`` and ``unit``.
+    * columns: ``ndim``, ``dtype`` (numpy type of the values) and ``unit``.
     """
 
     def __init__(self, definition):
@@ -415,6 +549,8 @@ class FormatValidator:
 
     def _check_header(self, meta, class_key, version):
         definition = header_definition(self.format, version, class_key)
+        if definition is None:
+            return [f"No {self.format} v{version} header definition for {class_key!r}"]
         errors = DefinitionValidator.from_dict(definition).check_header(meta)
         for check in self._models.get("HEADER_CHECKS", []):
             errors += check(meta, class_key, version)
@@ -444,7 +580,6 @@ def format_class_keys(format):
     for registry in ("TABLE", "HEADER"):
         for definitions in models.get(registry, {}).values():
             keys |= set(definitions)
-    keys.discard("BASE")
     return keys
 
 

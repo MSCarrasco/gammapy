@@ -5,7 +5,7 @@ Each format module (e.g. ``gammapy.io.registries.gadf``) describes its format as
 plain dicts, and the format is registered in ``DATA_FORMATS_MODELS``:
 
 * ``"TABLE"``          version -> HDU class key -> {column: spec}
-* ``"HEADER"``         version -> HDU class key -> {keyword: spec}  (``"BASE"`` = fallback)
+* ``"HEADER"``         version -> HDU class key -> {keyword: spec}
 * ``"HDU_CLASS_KEY"``  fn(header) -> HDU class key                  (optional)
 * ``"HEADER_CHECKS"``  [fn(header, class_key, version) -> list[str]] (optional; for
   rules that cannot be expressed in the keyword spec)
@@ -23,7 +23,23 @@ A header definition is {keyword: spec}. All spec entries are optional:
 * ``default``          value filled in on write when the keyword is absent
 * ``unit``, ``comment``  documentation; not checked
 
-Keywords absent from the definition are allowed (headers are open).
+Keywords absent from the definition are allowed (headers are open). An HDU
+class key with no header (or no table) definition is reported as an error.
+
+A table definition is {column: spec}, with the same presence entries
+(``required``, ``required_if``, ``required_unless``, conditions read from the
+header) and:
+
+* ``dtype``            type of the values, or a list of accepted ones:
+  "int" | "float" | "bool" | "str" (any width), "bit" (FITS bit field,
+  TFORM ``X``), or an exact numpy type name such as "int64" or "float64".
+  Give it only where the format specifies the column type.
+* ``ndim``             number of dimensions per row
+* ``unit``             expected unit; equivalent units are accepted, and a column
+  without ``unit`` in its spec must be dimensionless
+* ``description``      documentation; not checked
+
+Columns absent from the definition are allowed.
 
 This package holds data only: it imports nothing from ``gammapy.data``,
 ``gammapy.irf`` or ``gammapy.maps``.

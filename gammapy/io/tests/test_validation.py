@@ -67,7 +67,7 @@ AEFF_META = {
 
 def make_events_table(meta=None):
     table = Table()
-    table["EVENT_ID"] = np.arange(3)
+    table["EVENT_ID"] = np.arange(3, dtype=np.int64)
     table["TIME"] = [1.0, 2.0, 3.0] * u.s
     table["RA"] = [83.0, 83.5, 84.0] * u.deg
     table["DEC"] = [21.5, 22.0, 22.5] * u.deg
@@ -246,10 +246,77 @@ def test_check_table_optional_column():
     ]
 
 
-def test_check_table_dtype_not_checked():
-    table = make_xy_table()
-    table["X"] = np.ones((1, 3), dtype=np.int32) * u.TeV
-    assert DefinitionValidator(COLUMN_DEFINITION).check_table(table) == []
+def test_check_table_dtype_kind():
+    definition = {"N": {"dtype": "float", "required": True}}
+    validator = DefinitionValidator(definition)
+    for dtype in (np.float32, np.float64):
+        assert validator.check_table(Table({"N": np.ones(2, dtype=dtype)})) == []
+    assert validator.check_table(Table({"N": np.ones(2, dtype=np.int32)})) == [
+        "N: Column dtype incorrect. Expected float, got int32."
+    ]
+
+
+def test_check_table_dtype_exact():
+    validator = DefinitionValidator({"N": {"dtype": "int64", "required": True}})
+    assert validator.check_table(Table({"N": np.ones(2, dtype=np.int64)})) == []
+    # byte order does not matter (FITS data are big-endian)
+    assert validator.check_table(Table({"N": np.ones(2, dtype=">i8")})) == []
+    assert validator.check_table(Table({"N": np.ones(2, dtype=np.int32)})) == [
+        "N: Column dtype incorrect. Expected int64, got int32."
+    ]
+
+
+@pytest.mark.parametrize(
+    "spec, values, valid",
+    [
+        ("int", np.ones(2, dtype=np.uint16), True),
+        ("int", np.ones(2, dtype=bool), False),
+        ("bool", np.ones(2, dtype=bool), True),
+        ("str", np.array(["a", "b"]), True),
+        ("str", np.ones(2), False),
+        (["float", "int"], np.ones(2, dtype=np.int16), True),
+        (["float", "int"], np.array(["a", "b"]), False),
+    ],
+)
+def test_check_table_dtype_names(spec, values, valid):
+    validator = DefinitionValidator({"N": {"dtype": spec}})
+    assert (validator.check_table(Table({"N": values})) == []) is valid
+
+
+def test_check_table_dtype_list_message():
+    validator = DefinitionValidator({"N": {"dtype": ["float", "int"]}})
+    assert validator.check_table(Table({"N": ["a", "b"]})) == [
+        "N: Column dtype incorrect. Expected ['float', 'int'], got str."
+    ]
+
+
+def test_check_columns_bit_field():
+    validator = DefinitionValidator({"FLAGS": {"dtype": "bit"}})
+    bits = ColumnDescription(1, None, np.dtype(bool), bit_field=True)
+    logical = ColumnDescription(1, None, np.dtype(bool), bit_field=False)
+    assert validator.check_columns({"FLAGS": bits}) == []
+    assert validator.check_columns({"FLAGS": logical}) == [
+        "FLAGS: Column dtype incorrect. Expected bit, got bool."
+    ]
+    # in-memory table: the TFORM is unknown, any boolean column is accepted
+    assert validator.check_table(Table({"FLAGS": np.zeros((2, 32), dtype=bool)})) == []
+    # a bit field is not a "bool" column
+    validator = DefinitionValidator({"FLAGS": {"dtype": "bool"}})
+    assert validator.check_columns({"FLAGS": bits}) == [
+        "FLAGS: Column dtype incorrect. Expected bool, got bit."
+    ]
+
+
+def test_check_table_dtype_not_given():
+    """Columns whose spec has no dtype accept any type."""
+    validator = DefinitionValidator({"N": {"required": True}})
+    assert validator.check_table(Table({"N": np.array(["a", "b"])})) == []
+
+
+def test_check_table_invalid_dtype_in_definition():
+    validator = DefinitionValidator({"N": {"dtype": "not_a_dtype"}})
+    errors = validator.check_table(Table({"N": [1.0]}))
+    assert errors[0].startswith("N: invalid dtype 'not_a_dtype' in definition")
 
 
 def test_check_table_no_unit_means_dimensionless():
@@ -289,6 +356,14 @@ FITS_COLUMNS = [
     fits.Column("LOGICAL", "3L", array=np.ones((2, 3), dtype=bool)),
     fits.Column("VLA", "PE()", array=np.array([np.ones(3), np.ones(2)], dtype=object)),
     fits.Column("FITSUNIT", "E", array=np.ones(2), unit="s-1.MeV-1.sr-1"),
+    fits.Column("INT64", "K", array=np.ones(2, dtype=np.int64)),
+    fits.Column("INT16", "I", array=np.ones(2, dtype=np.int16)),
+    fits.Column("UINT8", "B", array=np.ones(2, dtype=np.uint8)),
+    fits.Column("DOUBLE", "D", array=np.ones(2)),
+    fits.Column("BITS", "32X", array=np.zeros((2, 32), dtype=bool)),
+    fits.Column("UINT64", "K", bzero=2**63, array=np.ones(2, dtype=np.uint64)),
+    fits.Column("UINT32", "J", bzero=2**31, array=np.ones(2, dtype=np.uint32)),
+    fits.Column("SCALED", "J", array=np.ones(2, dtype=np.int32)),  # TSCAL set below
     fits.Column("BADUNIT", "E", array=np.ones(2), unit="not_a_unit"),
 ]
 
@@ -297,6 +372,9 @@ FITS_COLUMNS = [
 def fits_table_file(tmp_path_factory):
     filename = tmp_path_factory.mktemp("columns") / "columns.fits"
     fits.BinTableHDU.from_columns(FITS_COLUMNS, name="TEST").writeto(filename)
+    # scaled integers are read as float64
+    idx = [c.name for c in FITS_COLUMNS].index("SCALED") + 1
+    fits.setval(filename, f"TSCAL{idx}", value=0.5, ext=1)
     return filename
 
 
@@ -310,6 +388,29 @@ def test_columns_from_header_matches_table_read(fits_table_file, name):
     from_table = columns_from_table(table)[name]
     assert from_header.ndim == from_table.ndim
     assert str(from_header.unit) == str(from_table.unit)
+    if from_table.dtype.kind in "SU":
+        assert from_header.dtype.kind in "SU"
+    else:
+        assert from_header.dtype == from_table.dtype.newbyteorder("=")
+
+
+def test_columns_from_header_signed_byte():
+    """FITS standard: TFORM B with TZERO=-128 holds signed bytes (astropy: float64)."""
+    header = fits.Header(
+        {"TFIELDS": 1, "TTYPE1": "SBYTE", "TFORM1": "B", "TZERO1": -128}
+    )
+    assert columns_from_header(header)["SBYTE"].dtype == np.dtype("int8")
+
+
+def test_columns_from_header_bit_field(fits_table_file):
+    columns = columns_from_header(fits.getheader(fits_table_file, "TEST"))
+    assert columns["BITS"].bit_field
+    assert columns["BIT"].bit_field
+    assert not columns["LOGICAL"].bit_field
+    assert not columns["DOUBLE"].bit_field
+    # in-memory tables do not know the TFORM
+    table = Table.read(fits_table_file, hdu="TEST", unit_parse_strict="silent")
+    assert columns_from_table(table)["BITS"].bit_field is None
 
 
 def test_columns_from_header_no_columns():
@@ -321,7 +422,12 @@ def test_column_description():
     errors = DefinitionValidator(COLUMN_DEFINITION).check_columns(
         {"X": ColumnDescription(1, u.TeV), "Y": column}
     )
+    # no dtype known: the dtype is not checked
     assert errors == []
+    errors = DefinitionValidator(COLUMN_DEFINITION).check_columns(
+        {"X": ColumnDescription(1, u.TeV, np.dtype("int32")), "Y": column}
+    )
+    assert errors == ["X: Column dtype incorrect. Expected float, got int32."]
 
 
 # ---------------------------------------------------------------------------
@@ -444,6 +550,56 @@ def test_unknown_hduvers():
     assert report.header_errors == [
         "Invalid HDUVERS='9.9': allowed values ['0.2', '0.3']"
     ]
+
+
+def test_unknown_class_key():
+    """A class key with no definition is an error for the header and the table."""
+    validator = FormatValidator("GADF", "0.3", log_errors=False)
+    report = validator.validate(make_events_table(), hdu="NOT_A_CLASS")
+    assert report.header_errors == ["No GADF v0.3 header definition for 'NOT_A_CLASS'"]
+    assert report.table_errors == ["No GADF v0.3 table definition for 'NOT_A_CLASS'"]
+
+    # unresolved from the header
+    report = validator.validate_meta({"HDUCLASS": "GADF", "HDUCLAS1": "FOO"})
+    assert report.hdu == "UNKNOWN_CLAS"
+    assert not report.valid
+
+
+def test_validate_events_column_dtypes(tmp_path):
+    """GADF column types: EVENT_ID int64, TIME float64, RA "float", EVENT_TYPE bits."""
+    table = make_events_table()
+    table["EVENT_ID"] = table["EVENT_ID"].astype(np.int32)
+    table["TIME"] = table["TIME"].astype(np.float32)
+    table["RA"] = table["RA"].astype(np.float32)  # any float width
+    hdu = fits.table_to_hdu(table)
+    columns = fits.ColDefs(
+        [fits.Column("EVENT_TYPE", "32L", array=np.zeros((3, 32), dtype=bool))]
+    )
+    hdu = fits.BinTableHDU.from_columns(hdu.columns + columns, header=hdu.header)
+
+    report = FormatValidator("GADF", "0.3", log_errors=False).validate_hdu(hdu)
+    assert report.table_errors == [
+        "EVENT_ID: Column dtype incorrect. Expected int64, got int32.",
+        "TIME: Column dtype incorrect. Expected float64, got float32.",
+        "EVENT_TYPE: Column dtype incorrect. Expected bit, got bool.",
+    ]
+
+
+def test_validate_events_bit_field(tmp_path):
+    hdu = fits.table_to_hdu(make_events_table())
+    columns = fits.ColDefs(
+        [fits.Column("EVENT_TYPE", "32X", array=np.zeros((3, 32), dtype=bool))]
+    )
+    hdu = fits.BinTableHDU.from_columns(hdu.columns + columns, header=hdu.header)
+    report = FormatValidator("GADF", "0.3").validate_hdu(hdu)
+    assert report.valid
+
+
+def test_irf_columns_have_no_dtype():
+    """GADF does not specify IRF column types: any float width (or int) passes."""
+    table = make_aeff_table()
+    table["EFFAREA"] = table["EFFAREA"].astype(np.float32)
+    assert FormatValidator("GADF", "0.3").validate(table).valid
 
 
 def test_strict_raises_with_full_report():
@@ -595,20 +751,14 @@ def test_validate_hdus_mislabelled(tmp_path):
 def test_header_definition():
     definition = header_definition("GADF", "0.3", "EVENTS")
     assert definition["OBS_MODE"]["required"]
-    # unknown class key falls back to the BASE definition
-    assert set(header_definition("GADF", "0.3", "NOT_A_CLASS")) == {
-        "HDUCLASS",
-        "HDUVERS",
-        "HDUDOC",
-        "HDUCLAS1",
-    }
-    assert header_definition("NOT_A_FORMAT", "0.3", "EVENTS") == {}
+    assert header_definition("GADF", "0.3", "NOT_A_CLASS") is None
+    assert header_definition("NOT_A_FORMAT", "0.3", "EVENTS") is None
 
 
 def test_format_class_keys():
     keys = format_class_keys("GADF")
     assert {"EVENTS", "GTI", "POINTING", "AEFF_2D", "BKG_3D", "PSF_TABLE"} <= keys
-    assert "BASE" not in keys
+    assert "THETA" in keys
 
 
 # ---------------------------------------------------------------------------
