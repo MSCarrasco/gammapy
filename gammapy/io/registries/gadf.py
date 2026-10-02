@@ -268,11 +268,15 @@ GADF_IRF_DL3_HDU_SPECIFICATION = {
     },
 }
 
+# EXTNAME -> IRF tag, used when HDUCLAS4 is missing. EXTNAME values shared by
+# several tags (e.g. BACKGROUND for bkg_2d and bkg_3d) are left out: such an
+# HDU cannot be identified from its EXTNAME alone.
+_EXTNAMES = [spec["extname"] for spec in GADF_IRF_DL3_HDU_SPECIFICATION.values()]
 
 GADF_EXTNAME_TO_TAG = {
     spec["extname"]: tag
     for tag, spec in GADF_IRF_DL3_HDU_SPECIFICATION.items()
-    if "extname" in spec
+    if "extname" in spec and _EXTNAMES.count(spec["extname"]) == 1
 }
 
 
