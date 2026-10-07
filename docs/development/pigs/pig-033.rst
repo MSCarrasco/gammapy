@@ -20,7 +20,8 @@ three parts:
 
 * a **format registry**, in which a format is described as data: for each
   version and each HDU class, a column definition and a header-keyword
-  definition, both plain dictionaries with the same layout;
+  definition, both plain dictionaries with the same layout, checked by a
+  ``DefinitionValidator`` that knows nothing of formats or versions;
 * a **FormatValidator**, which resolves the HDU class of a table, header or FITS
   HDU, checks it against the matching definitions and returns a
   ``ValidationReport`` listing every error found;
@@ -90,6 +91,35 @@ data store, and the loading path is left unchanged.
 Use cases
 =========
 
+Validate a product or a file
+----------------------------
+
+A producer can validate a table, a header or an HDU without a data store:
+
+.. code-block:: python
+
+    from astropy.io import fits
+    from gammapy.io.fits.validation import FormatValidator
+
+    validator = FormatValidator(format="GADF", version="0.3")
+
+    report = validator.validate(table, hdu="AEFF_2D")  # in-memory table
+    report.valid, report.errors
+
+    validator.validate_meta(header, hdu="EVENTS")  # header keywords only
+
+    with fits.open("events.fits.gz") as hdulist:  # file: header only, data not read
+        validator.validate_hdu(hdulist["EVENTS"])
+
+Compare versions
+----------------
+
+The same file can be checked against several versions. An EVENTS header with
+``OBS_MODE=DRIFT`` and no ``RA_PNT`` / ``DEC_PNT`` fails v0.2 (pointing
+keywords unconditionally mandatory) and passes v0.3 if ``ALT_PNT`` and
+``AZ_PNT`` are present. Conversely, the H.E.S.S. DL3 DR1 files satisfy v0.2
+but not v0.3 (see below).
+
 Validate a data store
 ---------------------
 
@@ -146,37 +176,22 @@ same output format as the other checks:
         print(record)
     # {'level': 'error', 'obs_id': 2, 'hdu': 'events', 'msg': "header: Missing ..."}
 
-Validate a product or a file
-----------------------------
-
-A producer can validate a table, a header or an HDU without a data store:
-
-.. code-block:: python
-
-    from astropy.io import fits
-    from gammapy.io.validation import FormatValidator
-
-    validator = FormatValidator(format="GADF", version="0.3")
-
-    report = validator.validate(table, hdu="AEFF_2D")  # in-memory table
-    report.valid, report.errors
-
-    validator.validate_meta(header, hdu="EVENTS")  # header keywords only
-
-    with fits.open("events.fits.gz") as hdulist:  # file: header only, data not read
-        validator.validate_hdu(hdulist["EVENTS"])
-
-Compare versions
-----------------
-
-The same file can be checked against several versions. An EVENTS header with
-``OBS_MODE=DRIFT`` and no ``RA_PNT`` / ``DEC_PNT`` fails v0.2 (pointing
-keywords unconditionally mandatory) and passes v0.3 if ``ALT_PNT`` and
-``AZ_PNT`` are present. Conversely, the H.E.S.S. DL3 DR1 files above satisfy
-v0.2 but not v0.3.
-
 Proposed design
 ===============
+
+The design has the three parts of the Abstract, each building on the previous
+one:
+
+1. **Format registry and DefinitionValidator.** A format is described as data,
+   and ``DefinitionValidator`` checks a header or a table against one
+   definition. ``DefinitionValidator`` has no knowledge of formats or versions:
+   it applies whatever definition it is given, so it belongs to this first part
+   and can be used and tested on its own.
+2. **FormatValidator.** It selects the definitions for a (format, version, HDU
+   class), runs ``DefinitionValidator`` on the header and the columns, and
+   returns a ``ValidationReport``.
+3. **DataStore integration.** ``DataStore.validate`` runs ``FormatValidator``
+   over the HDUs of a data store and summarises the reports.
 
 Format registry
 ---------------
@@ -202,11 +217,11 @@ A format is registered as a dictionary of definitions:
   ``fn(header, class_key, version) -> list[str]`` for rules that the
   specification entries below cannot express. GADF currently needs none.
 
-Each format lives in its own module, ``gammapy.io.registries.<format>``, which
+Each format lives in its own module, ``gammapy.io.fits.registries.<format>``, which
 holds the definitions, the HDU class-key resolver, and the registration above.
 These modules are data: they import nothing from ``gammapy.data``,
 ``gammapy.irf`` or ``gammapy.maps``. The built-in formats are imported at the
-end of ``gammapy/io/registries/__init__.py``, so they are registered as soon as
+end of ``gammapy/io/fits/registries/__init__.py``, so they are registered as soon as
 the registry is imported. Adding a format means writing its module and adding
 one import line there.
 
@@ -305,7 +320,7 @@ Header definitions are composed from keyword blocks with
 ``compose_header(*blocks, required=..., updates=...)``. Blocks that any FITS
 format can reuse (``FITS_TIME_KEYWORDS``, ``FITS_TIME_CONVENIENCE_KEYWORDS``,
 ``GENERAL_KEYWORDS``, ``HDU_KEYWORDS``, ``HDU_RESPONSE_KEYWORDS``) are in
-``gammapy.io.registries.fits`` and are all optional there. Format blocks (for
+``gammapy.io.fits.registries.fits`` and are all optional there. Format blocks (for
 GADF: observation, pointing, Earth location, ...) and the choice of which
 keywords are mandatory belong to the format module.
 
@@ -330,44 +345,13 @@ All methods return the list of errors, empty when compliant, so that a report
 lists every problem at once.
 
 The column checks only need the per-cell ``ndim``, the type and the unit of
-each column. They work on ``ColumnDescription(ndim, unit, dtype, bit_field)``
-objects, built either from an in-memory table (``columns_from_table``) or from a
-FITS binary-table header (``columns_from_header``). The latter uses the
-``TTYPEn``, ``TFORMn``, ``TDIMn``, ``TUNITn``, ``TZEROn`` and ``TSCALn``
-keywords and gives the same result as `~astropy.table.Table.read`:
-
-.. list-table::
-   :header-rows: 1
-   :widths: 40 60
-
-   * - Column format
-     - ``ndim``
-   * - ``TDIMn`` given
-     - number of dimensions in ``TDIMn``
-   * - repeat count > 1, no ``TDIMn``
-     - 1
-   * - repeat count 1, no ``TDIMn``
-     - 0
-   * - strings (``A``)
-     - number of dimensions in ``TDIMn`` minus 1, else 0
-   * - bits (``X``)
-     - 1
-   * - variable-length arrays (``P``, ``Q``)
-     - 0
-
-The type follows the ``TFORMn`` code [FITS-3.0]_ (``K`` gives ``int64``, ``E``
-``float32``, ``D`` ``float64``, ...). The ``TZEROn`` offsets of the standard
-give unsigned 16, 32 and 64-bit integers and signed bytes, and any other
-scaling gives ``float64``. For signed bytes (``B`` with ``TZEROn = -128``)
-astropy returns ``float64``; the check follows the standard. ``bit_field``
-tells a bit-field column (``X``) apart from a logical one (``L``), which astropy
-reads both as booleans: an in-memory table has lost that distinction, so there
-``"bit"`` accepts any boolean column.
-
-Units are parsed as astropy does when reading a table
-(``u.Unit(TUNITn, format="fits")``). Validating a FITS HDU therefore never
-reads its data: on a test file of 5 million events, validating the HDU took
-2 ms, against 142 ms when reading the table first, with identical reports.
+each column. They work on ``ColumnDescription`` objects, built either from an
+in-memory table (``columns_from_table``) or from a FITS binary-table header
+(``columns_from_header``). The latter reads the column keywords (``TTYPEn``,
+``TFORMn``, ``TDIMn``, ``TUNITn``, ...) and gives the same description as
+`~astropy.table.Table.read`, so validating a FITS HDU never reads its data: on a
+test file of 5 million events, validating the HDU took 2 ms, against 142 ms when
+reading the table first, with identical reports.
 
 FormatValidator and ValidationReport
 ------------------------------------
@@ -385,7 +369,7 @@ HDU against the definitions of a format:
    not used for the fallback, and such an HDU is left unresolved rather than
    guessed.
 2. **Select the version.** The requested version, or when ``version=None`` the
-   HDU's own ``HDUVERS``, falling back to v0.3 when it is absent.
+   HDU's own ``HDUVERS``, falling back to the latest version when it is absent.
 3. **Check the header** with ``DefinitionValidator.check_header`` against
    ``HEADER[version][class_key]``, then run any ``HEADER_CHECKS``. A class
    without a header definition is reported as an error.
@@ -427,7 +411,7 @@ The entry points differ only in where the columns come from:
 All errors of an HDU are collected before anything is raised. With
 ``strict=True`` the validator then raises ``FormatComplianceError``, a
 ``ValueError`` subclass that carries the report. Otherwise each error is logged
-as a warning on the ``gammapy.io.validation`` logger, unless
+as a warning on the ``gammapy.io.fits.validation`` logger, unless
 ``log_errors=False``, used by batch validation, where the caller summarises.
 
 Batch validation
@@ -461,20 +445,28 @@ Integration in the DataStore
 Module layout
 -------------
 
+Everything goes in a new ``gammapy.io.fits`` subpackage, next to the existing
+``gammapy.io.asdf``: the registry and the validation rely on FITS headers and
+binary-table columns, and so will the VODF format.
+
 .. code-block:: text
 
-    gammapy/io/
+    gammapy/io/fits/
     ├── __init__.py
     ├── validation.py      DefinitionValidator, ColumnDescription,
     │                      columns_from_table, columns_from_header,
     │                      FormatValidator, ValidationReport,
     │                      FormatComplianceError, validate_hdus
+    ├── tests/
+    │   └── test_validation.py
     └── registries/
         ├── __init__.py    DATA_FORMATS_MODELS, compose_header,
         │                  registration of the built-in formats
-        ├── fits.py        generic FITS keyword blocks
-        └── gadf.py        GADF v0.2 / v0.3 definitions, class-key resolver,
-                           registration
+        ├── common.py        generic FITS keyword blocks
+        ├── gadf.py        GADF v0.2 / v0.3 definitions, class-key resolver,
+        │                  registration
+        └── tests/
+            └── test_registries.py
 
 Dependencies go one way: ``registries`` depends on nothing else in Gammapy
 (apart from the CTA-1DC mapping, see Open questions), ``validation.py``
@@ -545,7 +537,7 @@ supported.
 Backward compatibility
 ======================
 
-The proposal is additive: a new ``gammapy.io`` package, a new
+The proposal is additive: a new ``gammapy.io.fits`` subpackage, a new
 ``DataStore.validate`` method and ``validation`` attribute, a new
 ``validate=False`` keyword on ``from_dir`` and ``from_file``, and a new
 ``"format"`` check. The one visible change is that ``DataStore.check()`` with
@@ -555,65 +547,42 @@ reports more and takes longer.
 Implementation plan
 ===================
 
-The implementation is a single pull request:
+The implementation is split into three pull requests, one per part of the
+design, each with its tests:
 
-1. ``gammapy.io.registries``: ``DATA_FORMATS_MODELS``, ``compose_header``, the
-   generic FITS keyword blocks, and the GADF v0.2 and v0.3 definitions with the
-   class-key resolver and the registration.
-2. ``gammapy.io.validation``: ``DefinitionValidator``, the column descriptions,
-   ``FormatValidator``, ``ValidationReport``, ``FormatComplianceError`` and
-   ``validate_hdus``.
-3. ``DataStore.validate``, ``validate`` on ``from_dir`` / ``from_file``, the
-   ``"format"`` check, and a documentation section on validating a data store.
+1. **Registry and DefinitionValidator.** ``gammapy.io.fits.registries``
+   (``DATA_FORMATS_MODELS``, ``compose_header``, the common FITS keyword
+   blocks, the GADF v0.2 and v0.3 definitions with the class-key resolver and
+   the registration), and in ``gammapy.io.fits.validation`` the
+   ``DefinitionValidator`` with the column descriptions
+   (``ColumnDescription``, ``columns_from_table``, ``columns_from_header``).
+   Tests: ``test_registries.py`` (mandatory sets per HDU and version, column
+   types only where GADF gives them, class-key resolution, no import of
+   analysis code) and the ``DefinitionValidator`` tests of
+   ``test_validation.py`` (keyword and column rules including types and
+   conditional requirements, column descriptions from headers compared with
+   ``Table.read`` for every column format).
+2. **FormatValidator and ValidationReport.** ``FormatValidator``,
+   ``ValidationReport``, ``FormatComplianceError`` and the batch function
+   ``validate_hdus``. Tests added to ``test_validation.py``: class and version
+   resolution, unknown class keys, header-only validation of HDUs (no data
+   read), strict mode, logging, batch validation including missing files and
+   HDUs.
+3. **DataStore integration.** ``DataStore.validate``, ``validate`` on
+   ``from_dir`` / ``from_file``, the ``"format"`` check, and a documentation
+   section on validating a data store. Tests: ``test_data_store_validation.py``
+   (summary table, selections, versions, strict mode, mislabelled index,
+   ``"format"`` check, unchanged lazy loading).
 
-Tests cover the registry (mandatory sets per HDU and version, class-key
-resolution, column types only where GADF gives them), the validator (keyword
-and column rules including types, column descriptions from headers compared
-with ``Table.read`` for every column format, no data read,
-strict mode, logging, batch validation including missing files and HDUs), and
-the data store (summary table, selections, versions, strict mode, mislabelled
-index, ``"format"`` check, unchanged lazy loading). Tests marked
-``requires_data`` run on the H.E.S.S. DL3 DR1 data set.
+Tests marked ``requires_data`` run on the H.E.S.S. DL3 DR1 data set.
 
 Open questions
 ==============
-
-**Default version of DataStore.validate.** ``version=None`` tests each HDU
-against its own ``HDUVERS``, falling back to v0.3 when it is absent. The
-alternative is to default to the latest version, which answers "is this store
-compliant with the current format" rather than "does each HDU satisfy the
-version it declares". On H.E.S.S. DL3 DR1 the two answers differ.
-
-**Legacy time keywords.** For existing files lacking ``TIMEUNIT`` or
-``TIMEREF``, the specification lets tools assume ``TIMEUNIT='s'`` and
-``TIMEREF='LOCAL'`` [GADF-time]_. Validation currently follows the rule for new
-files and reports them missing.
-
-**Columns without a unit.** A column definition without ``unit`` expects a
-dimensionless column. Whether such columns should rather accept any unit is to
-be decided.
 
 **Column types without a width.** GADF writes ``int64`` and ``float64`` for
 some columns and ``int`` or ``float`` for others, in the same table. The latter
 are read as "any width", which accepts both 32-bit and 64-bit columns. Reading
 ``float`` as ``float32`` only would reject more precise data.
-
-**Check levels.** All format errors are reported at the ``"error"`` level of
-``DataStore.check``. The specification distinguishes mandatory from optional
-items only; a ``"recommended"`` level (reported as a warning) could be added to
-the definitions if needed.
-
-**Non-compliant HDUCLAS4 values.** The CTA-1DC files use ``HDUCLAS4`` values
-that do not follow the specification. The resolver currently maps them to the
-standard classes through ``gammapy.irf.io``, imported only on that path.
-Whether to keep this mapping or report them as unknown is to be decided.
-
-**Units and comments.** The ``unit`` and ``comment`` entries of the keyword
-definitions are not filled in yet, pending the decision on how comments and
-units are encoded in FITS headers, coordinated with the CTAO work.
-
-**Other formats.** The registry is designed to hold other formats (VODF, OGIP
-for spectra). Which ones to support, and in which order, is to be decided.
 
 Decision
 ========
@@ -622,9 +591,6 @@ To be completed after discussion.
 
 .. [PIG25] `PIG 25 - Metadata container for Gammapy
    <https://docs.gammapy.org/dev/development/pigs/pig-025.html>`_
-.. [FITS-3.0] `Pence et al. 2010, Definition of the Flexible Image Transport
-   System (FITS), version 3.0, A&A 524, A42, Tables 18 and 19
-   <https://doi.org/10.1051/0004-6361/201015362>`_
 .. [GADF-about] `GADF v0.3, About
    <https://gamma-astro-data-formats.readthedocs.io/en/v0.3/about.html>`_
 .. [GADF-coords] `GADF v0.3, Earth location
